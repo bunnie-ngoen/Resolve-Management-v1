@@ -1,0 +1,584 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+	
+	model users {
+	  id                      Int                 @id @default(autoincrement())
+	  username                String              @unique @db.VarChar(50)
+	  email                   String              @unique @db.VarChar(100)
+	  password_hash           String              @db.VarChar(255)
+	  full_name               String              @db.VarChar(100)
+	  avatar_url              String?             @db.VarChar(255)
+	  phone_number            String?             @db.VarChar(20)
+	  department_id           Int?
+	  
+	  // Email Verification
+	  is_email_verified       Boolean             @default(false)
+	  email_verified_at       DateTime?           @db.Timestamp(6)
+	  email_verification_token String?            @db.VarChar(255)
+	  
+	  // Password Policy & Security
+	  password_changed_at     DateTime?           @db.Timestamp(6)
+	  password_expires_at     DateTime?           @db.Timestamp(6)
+	  must_change_password    Boolean             @default(false)
+	  
+	  // Login Security
+	  failed_login_attempts   Int                 @default(0)
+	  locked_until            DateTime?           @db.Timestamp(6)
+	  last_login_at           DateTime?           @db.Timestamp(6)
+	  last_login_ip           String?             @db.VarChar(45)
+	  last_login_user_agent   String?             @db.VarChar(500)
+	  
+	  // Status & Role
+	  status                  user_status         @default(active)
+	  role                    user_role           @default(user)
+	  
+	  // Timestamps
+	  created_at              DateTime            @default(now()) @db.Timestamp(6)
+	  updated_at              DateTime            @updatedAt @db.Timestamp(6)
+	  deleted_at              DateTime?           @db.Timestamp(6) // Soft delete
+	  
+	  // Relations - Auth & Security
+	  sessions                sessions[]
+	  audit_logs              audit_logs[]
+	  mfa_secrets             mfa_secrets?
+	  password_resets         password_resets[]
+	  login_attempts          login_attempts[]
+	  user_settings           user_settings?
+	  user_permissions        user_permissions[]
+	  
+	  // Relations - Existing Features
+	  attachments             attachments[]
+	  bookmarks               bookmarks[]
+	  comments                comments[]
+	  notifications_received  notifications[]     @relation("notifications_user_idTousers")
+	  notifications_triggered notifications[]     @relation("notifications_related_user_idTousers")
+	  post_revisions          post_revisions[]
+	  posts                   posts[]
+	  reactions               reactions[]
+	  departments             departments?        @relation(fields: [department_id], references: [id], onUpdate: NoAction)
+	  
+	  @@index([email])
+	  @@index([username])
+	  @@index([department_id])
+	  @@index([status, role])
+	  @@index([is_email_verified])
+	  @@index([last_login_at])
+	}
+	
+	// Session Management - JWT Refresh Tokens
+	model sessions {
+	  id                String          @id @default(uuid())
+	  user_id           Int
+	  refresh_token     String          @unique @db.VarChar(500)
+	  access_token_jti  String?         @db.VarChar(100) // JWT ID for access token
+	  
+	  // Device & Location Info
+	  ip_address        String?         @db.VarChar(45)
+	  user_agent        String?         @db.VarChar(500)
+	  device_info       Json?           // {type: "mobile", os: "iOS", browser: "Safari"}
+	  location          String?         @db.VarChar(100) // City, Country
+	  
+	  // Session Status
+	  is_active         Boolean         @default(true)
+	  expires_at        DateTime        @db.Timestamp(6)
+	  last_activity     DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  // Revocation
+	  revoked_at        DateTime?       @db.Timestamp(6)
+	  revoked_reason    String?         @db.VarChar(255) // "logout", "password_changed", "suspicious_activity"
+	  
+	  created_at        DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  users             users           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	  
+	  @@index([user_id, is_active])
+	  @@index([refresh_token])
+	  @@index([expires_at])
+	  @@index([last_activity])
+	}
+	
+	// Multi-Factor Authentication
+	model mfa_secrets {
+	  id              Int             @id @default(autoincrement())
+	  user_id         Int             @unique
+	  secret          String          @db.VarChar(255)        // Base32 encoded secret
+	  backup_codes    Json?                                   // Array of hashed backup codes
+	  method          mfa_method      @default(totp)          // totp, sms, email
+	  
+	  is_enabled      Boolean         @default(false)
+	  verified_at     DateTime?       @db.Timestamp(6)
+	  
+	  created_at      DateTime        @default(now()) @db.Timestamp(6)
+	  updated_at      DateTime        @updatedAt @db.Timestamp(6)
+	  
+	  users           users           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	}
+	
+	// Audit Logs - Compliance & Security Tracking
+	model audit_logs {
+	  id              BigInt          @id @default(autoincrement())
+	  user_id         Int?
+	  
+	  // Action Details
+	  action          audit_action                            // LOGIN, LOGOUT, CREATE_POST...
+	  resource_type   String?         @db.VarChar(50)         // USER, POST, COMMENT, SESSION
+	  resource_id     String?         @db.VarChar(100)
+	  
+	  // Request Context
+	  ip_address      String?         @db.VarChar(45)
+	  user_agent      String?         @db.VarChar(500)
+	  correlation_id  String          @db.VarChar(100)        // Track request across services
+	  
+	  // Result
+	  status          audit_status    @default(success)       // success, failed, error
+	  error_message   String?         @db.Text
+	  error_code      String?         @db.VarChar(50)
+	  
+	  // Additional Data
+	  metadata        Json?                                   // Any additional context
+	  duration_ms     Int?                                    // Request duration
+	  
+	  created_at      DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  users           users?          @relation(fields: [user_id], references: [id], onDelete: SetNull)
+	  
+	  @@index([user_id, created_at])
+	  @@index([correlation_id])
+	  @@index([action, created_at])
+	  @@index([resource_type, resource_id])
+	  @@index([status, created_at])
+	}
+	
+	// Password Reset Tokens
+	model password_resets {
+	  id              Int             @id @default(autoincrement())
+	  user_id         Int
+	  token           String          @unique @db.VarChar(255)
+	  
+	  expires_at      DateTime        @db.Timestamp(6)
+	  used_at         DateTime?       @db.Timestamp(6)
+	  
+	  ip_address      String?         @db.VarChar(45)
+	  user_agent      String?         @db.VarChar(500)
+	  
+	  created_at      DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  users           users           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	  
+	  @@index([token, expires_at])
+	  @@index([user_id, created_at])
+	}
+	
+	// Login Attempts - Brute Force Protection
+	model login_attempts {
+	  id              Int             @id @default(autoincrement())
+	  user_id         Int?
+	  email           String          @db.VarChar(100)
+	  ip_address      String          @db.VarChar(45)
+	  user_agent      String?         @db.VarChar(500)
+	  
+	  success         Boolean
+	  error_message   String?         @db.VarChar(255)
+	  error_code      String?         @db.VarChar(50)
+	  
+	  created_at      DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  users           users?          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	  
+	  @@index([email, created_at])
+	  @@index([ip_address, created_at])
+	  @@index([user_id, success, created_at])
+	}
+	
+	// Permissions - Fine-grained Access Control
+	model permissions {
+	  id                Int                 @id @default(autoincrement())
+	  name              String              @unique @db.VarChar(100)  // posts:create, users:delete
+	  description       String?             @db.Text
+	  resource          String              @db.VarChar(50)           // posts, users, comments
+	  action            String              @db.VarChar(50)           // create, read, update, delete
+	  
+	  created_at        DateTime            @default(now()) @db.Timestamp(6)
+	  updated_at        DateTime            @updatedAt @db.Timestamp(6)
+	  
+	  role_permissions  role_permissions[]
+	  user_permissions  user_permissions[]
+	}
+	
+	// Role-Permission Mapping
+	model role_permissions {
+	  role              user_role
+	  permission_id     Int
+	  
+	  created_at        DateTime        @default(now()) @db.Timestamp(6)
+	  
+	  permissions       permissions     @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+	  
+	  @@id([role, permission_id])
+	}
+	
+	// User-Specific Permission Overrides
+	model user_permissions {
+	  user_id           Int
+	  permission_id     Int
+	  granted           Boolean         @default(true)  // true = grant, false = revoke
+	  
+	  granted_by        Int?                            // Admin who granted this
+	  granted_at        DateTime        @default(now()) @db.Timestamp(6)
+	  expires_at        DateTime?       @db.Timestamp(6) // Temporary permissions
+	  
+	  users             users           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	  permissions       permissions     @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+	  
+	  @@id([user_id, permission_id])
+	  @@index([expires_at])
+	}
+	
+	// User Settings & Preferences
+	model user_settings {
+	  id                          Int       @id @default(autoincrement())
+	  user_id                     Int       @unique
+	  
+	  // Localization
+	  language                    String    @default("vi") @db.VarChar(10)
+	  timezone                    String    @default("Asia/Ho_Chi_Minh") @db.VarChar(50)
+	  date_format                 String    @default("DD/MM/YYYY") @db.VarChar(20)
+	  
+	  // Notifications
+	  email_notifications         Boolean   @default(true)
+	  push_notifications          Boolean   @default(true)
+	  notification_frequency      String    @default("realtime") @db.VarChar(20) // realtime, daily, weekly
+	  
+	  // Security
+	  two_factor_enabled          Boolean   @default(false)
+	  session_timeout_minutes     Int       @default(480)         // 8 hours
+	  require_password_change_days Int?     @default(90)
+	  
+	  // UI Preferences
+	  theme                       String    @default("light") @db.VarChar(20)
+	  sidebar_collapsed           Boolean   @default(false)
+	  items_per_page              Int       @default(20)
+	  
+	  created_at                  DateTime  @default(now()) @db.Timestamp(6)
+	  updated_at                  DateTime  @updatedAt @db.Timestamp(6)
+	  
+	  users                       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+	}
+	
+	// ============================================================================
+	// EXISTING FEATURES - POSTS, COMMENTS, BOOKMARKS, etc.
+	// ============================================================================
+	
+	model attachments {
+	  id          Int       @id @default(autoincrement())
+	  post_id     Int
+	  file_name   String    @db.VarChar(255)
+	  file_path   String    @db.VarChar(500)
+	  file_type   String?   @db.VarChar(50)
+	  file_size   BigInt?
+	  uploaded_by Int
+	  created_at  DateTime? @default(now()) @db.Timestamp(6)
+	  posts       posts     @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  users       users     @relation(fields: [uploaded_by], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  
+	  @@index([post_id])
+	  @@index([uploaded_by])
+	}
+	
+	model bookmarks {
+	  id         Int       @id @default(autoincrement())
+	  user_id    Int
+	  post_id    Int
+	  note       String?
+	  created_at DateTime? @default(now()) @db.Timestamp(6)
+	  posts      posts     @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@unique([user_id, post_id])
+	  @@index([user_id])
+	  @@index([post_id])
+	}
+	
+	model categories {
+	  id               Int          @id @default(autoincrement())
+	  name             String       @db.VarChar(100)
+	  slug             String       @unique @db.VarChar(100)
+	  description      String?
+	  parent_id        Int?
+	  display_order    Int?         @default(0)
+	  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+	  updated_at       DateTime?    @updatedAt @db.Timestamp(6)
+	  categories       categories?  @relation("categoriesTocategories", fields: [parent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  other_categories categories[] @relation("categoriesTocategories")
+	  posts            posts[]
+	  
+	  @@index([slug])
+	  @@index([parent_id])
+	}
+	
+	model comments {
+	  id             Int             @id @default(autoincrement())
+	  post_id        Int
+	  user_id        Int
+	  parent_id      Int?
+	  content        String
+	  status         comment_status? @default(approved)
+	  created_at     DateTime?       @default(now()) @db.Timestamp(6)
+	  updated_at     DateTime?       @updatedAt @db.Timestamp(6)
+	  comments       comments?       @relation("commentsTocomments", fields: [parent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  other_comments comments[]      @relation("commentsTocomments")
+	  posts          posts           @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  users          users           @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@index([post_id], map: "idx_comments_post")
+	  @@index([user_id], map: "idx_comments_user")
+	  @@index([status])
+	}
+	
+	model departments {
+	  id                     Int                      @id @default(autoincrement())
+	  name                   String                   @db.VarChar(100)
+	  description            String?
+	  created_at             DateTime?                @default(now()) @db.Timestamp(6)
+	  updated_at             DateTime?                @updatedAt @db.Timestamp(6)
+	  post_department_access post_department_access[]
+	  users                  users[]
+	  
+	  @@index([name])
+	}
+	
+	model notifications {
+	  id                  Int               @id @default(autoincrement())
+	  user_id             Int
+	  type                notification_type
+	  title               String            @db.VarChar(255)
+	  content             String?
+	  related_post_id     Int?
+	  related_user_id     Int?
+	  is_read             Boolean?          @default(false)
+	  created_at          DateTime?         @default(now()) @db.Timestamp(6)
+	  posts               posts?            @relation(fields: [related_post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  related_user        users?            @relation("notifications_related_user_idTousers", fields: [related_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  user                users             @relation("notifications_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@index([user_id, is_read], map: "idx_notifications_user_unread")
+	  @@index([created_at])
+	}
+	
+	model post_department_access {
+	  post_id       Int
+	  department_id Int
+	  departments   departments @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  posts         posts       @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@id([post_id, department_id])
+	  @@index([department_id])
+	}
+	
+	model post_revisions {
+	  id         Int       @id @default(autoincrement())
+	  post_id    Int
+	  title      String?   @db.VarChar(255)
+	  content    String?
+	  edited_by  Int
+	  edit_note  String?   @db.VarChar(255)
+	  created_at DateTime? @default(now()) @db.Timestamp(6)
+	  users      users     @relation(fields: [edited_by], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  posts      posts     @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@index([post_id], map: "idx_post_revisions_post")
+	}
+	
+	model post_tags {
+	  post_id Int
+	  tag_id  Int
+	  posts   posts @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  tags    tags  @relation(fields: [tag_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@id([post_id, tag_id])
+	  @@index([tag_id])
+	}
+	
+	model posts {
+	  id                     Int                      @id @default(autoincrement())
+	  title                  String                   @db.VarChar(255)
+	  slug                   String                   @unique @db.VarChar(255)
+	  content                String
+	  excerpt                String?
+	  featured_image         String?                  @db.VarChar(255)
+	  author_id              Int
+	  category_id            Int?
+	  status                 post_status?             @default(draft)
+	  visibility             post_visibility?         @default(internal)
+	  view_count             Int?                     @default(0)
+	  is_pinned              Boolean?                 @default(false)
+	  published_at           DateTime?                @db.Timestamp(6)
+	  created_at             DateTime?                @default(now()) @db.Timestamp(6)
+	  updated_at             DateTime?                @updatedAt @db.Timestamp(6)
+	  attachments            attachments[]
+	  bookmarks              bookmarks[]
+	  comments               comments[]
+	  notifications          notifications[]
+	  post_department_access post_department_access[]
+	  post_revisions         post_revisions[]
+	  post_tags              post_tags[]
+	  users                  users                    @relation(fields: [author_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  categories             categories?              @relation(fields: [category_id], references: [id], onUpdate: NoAction)
+	  reactions              reactions[]
+	
+	  @@index([author_id], map: "idx_posts_author")
+	  @@index([published_at], map: "idx_posts_published_at")
+	  @@index([status], map: "idx_posts_status")
+	  @@index([slug])
+	  @@index([visibility])
+	}
+	
+	model reactions {
+	  id            Int           @id @default(autoincrement())
+	  post_id       Int
+	  user_id       Int
+	  reaction_type reaction_type
+	  created_at    DateTime?     @default(now()) @db.Timestamp(6)
+	  posts         posts         @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	  users         users         @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+	
+	  @@unique([post_id, user_id, reaction_type])
+	  @@index([post_id])
+	  @@index([user_id])
+	}
+	
+	model tags {
+	  id         Int         @id @default(autoincrement())
+	  name       String      @unique @db.VarChar(50)
+	  slug       String      @unique @db.VarChar(50)
+	  created_at DateTime?   @default(now()) @db.Timestamp(6)
+	  post_tags  post_tags[]
+	  
+	  @@index([slug])
+	}
+	
+	// ============================================================================
+	// ENUMS
+	// ============================================================================
+	
+	// Auth & Security Enums
+	enum user_status {
+	  active
+	  inactive
+	  suspended
+	  locked
+	}
+	
+	enum user_role {
+	  superadmin
+	  admin
+	  moderator
+	  user
+	  guest
+	}
+	
+	enum mfa_method {
+	  totp      // Time-based OTP (Google Authenticator)
+	  sms       // SMS OTP
+	  email     // Email OTP
+	}
+	
+	enum audit_action {
+	  // Authentication
+	  LOGIN
+	  LOGOUT
+	  LOGIN_FAILED
+	  PASSWORD_CHANGED
+	  PASSWORD_RESET_REQUESTED
+	  PASSWORD_RESET_COMPLETED
+	  EMAIL_VERIFIED
+	  
+	  // MFA
+	  MFA_ENABLED
+	  MFA_DISABLED
+	  MFA_VERIFIED
+	  
+	  // User Management
+	  USER_CREATED
+	  USER_UPDATED
+	  USER_DELETED
+	  USER_SUSPENDED
+	  USER_ACTIVATED
+	  
+	  // Session Management
+	  SESSION_CREATED
+	  SESSION_REVOKED
+	  SESSION_EXPIRED
+	  
+	  // Content Management
+	  POST_CREATED
+	  POST_UPDATED
+	  POST_DELETED
+	  POST_PUBLISHED
+	  COMMENT_CREATED
+	  COMMENT_UPDATED
+	  COMMENT_DELETED
+	  
+	  // Permissions
+	  PERMISSION_GRANTED
+	  PERMISSION_REVOKED
+	  ROLE_CHANGED
+	}
+	
+	enum audit_status {
+	  success
+	  failed
+	  error
+	  warning
+	}
+	
+	// Existing Enums
+	enum comment_status {
+	  approved
+	  pending
+	  spam
+	  rejected
+	}
+	
+	enum notification_type {
+	  new_post
+	  comment
+	  reaction
+	  mention
+	  system
+	  security_alert
+	}
+	
+	enum post_status {
+	  draft
+	  pending
+	  published
+	  archived
+	}
+	
+	enum post_visibility {
+	  public
+	  internal
+	  department
+	  private
+	}
+	
+	enum reaction_type {
+	  like
+	  love
+	  insightful
+	  celebrate
+	}
+
