@@ -28,4 +28,4 @@ import { UserModule } from '../user/user.module.js';
   providers: [AuthService],
   exports: [AuthService, JwtModule],
 })
-export class AuthModule { }
+export class AuthModule {}

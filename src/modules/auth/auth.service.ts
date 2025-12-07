@@ -1,12 +1,13 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
-import { JwtPayload, TokenResponse } from 'src/common/interfaces/jwt-payload.interface.js';
+import { JwtPayload, TokenResponse,LoginResponse } from 'src/common/interfaces/jwt-payload.interface.js';
 import { UserService } from '../user/user.service.js';
 import { audit_action, audit_status } from 'generated/prisma/enums.js';
 import { v4 as uuidv4 } from 'uuid';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -14,13 +15,13 @@ export class AuthService {
     private users: UserService,
     private jwt: JwtService,
     private config: ConfigService,
-  ) { }
+  ) {}
 
   async login(
     dto: LoginDto,
     ipAddress?: string,
     userAgent?: string,
-  ): Promise<TokenResponse> {
+  ): Promise<LoginResponse> {
     const user = await this.users.findByEmail(dto.email);
 
     if (user.locked_until && user.locked_until > new Date()) {
@@ -34,7 +35,7 @@ export class AuthService {
       throw new UnauthorizedException('Account is inactive')
     }
 
-    const valid = await this.users.validatePassword(dto.password, user.password_hash);
+    const valid = await this.users.validatePassword(dto.password, user.password_hash);  ///
 
     if (!valid) {
       await this.users.incrementFailedLogin(user.id);
@@ -44,22 +45,23 @@ export class AuthService {
 
     // nếu đúng password update lại và reset failedLogin về 0
     await this.users.updateLastLogin(user.id, ipAddress, userAgent);
-    await this.logLoginAttempt(user.email, false, ipAddress, userAgent, "", user.id);
+    await this.logLoginAttempt(user.email, true, ipAddress, userAgent, "", user.id);
 
     //
     await this.createAuditLog({
       user_id: user.id,
       action: 'LOGIN',
-      status: 'failed',
+      status: 'success',
       ip_address: ipAddress,
       user_agent: userAgent,
-      error_message: 'Invalid password',
+      error_message: '',
       resource_type: 'USER',
       resource_id: user.id.toString(),
       metadata: { email: dto.email },
     });
 
-    return this.generateTokens(
+    
+    const tokens = await this.generateTokens(
       user.id,
       user.email,
       user.username,
@@ -67,7 +69,12 @@ export class AuthService {
       ipAddress,
       userAgent,
     );
+    const {password_hash ,...userInfo} = user;
 
+    return {
+      ...tokens,
+      user : userInfo
+    }
 
   }
 
